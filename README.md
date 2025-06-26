@@ -38,3 +38,33 @@ train_embeddings.py - Script to train and save embedding models
 run_matching.py - Script to run the end-to-end matching workflow
 Requirements
 See requirements.txt for all dependencies.
+
+## Example Output
+
+When you run the matching workflow, you will see output like this:
+
+```
+Resume embeddings extracted and stored.
+Job description embedding stored.
+Top resume scores:
+Resume ID: 3, Filename: john_doe.pdf, Similarity: 0.8123
+Content: Experienced Python developer with 5 years in machine learning and SQL databases.
+
+Resume ID: 7, Filename: jane_smith.pdf, Similarity: 0.7991
+Content: Software engineer skilled in Python, data analysis, and cloud technologies.
+
+Resume ID: 2, Filename: alice_resume.pdf, Similarity: 0.7554
+Content: Data scientist with expertise in Python, SQL, and statistical modeling.
+```
+
+- **Resume ID**: The unique identifier of the resume in the database
+- **Filename**: The name of the PDF file
+- **Similarity**: The cosine similarity score between the job description and the resume (higher means more relevant)
+- **Content**: The extracted text content from the resume PDF (first few lines or a summary)
+
+You can use these scores and content previews to shortlist the best-matching resumes for a given job description.
+
+---
+
+## License
+MIT License
