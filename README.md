@@ -17,7 +17,7 @@ Setup
 
 Install dependencies:
 
-pip install -r requirements.txt
+  pip install -r requirements.txt
 
 Configure your PostgreSQL database:
 
