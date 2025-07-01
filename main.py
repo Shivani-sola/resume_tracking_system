@@ -14,7 +14,7 @@ conn = psycopg2.connect(
 
     user="postgres",
 
-    password="shiva"
+    password="Manojgopi@12"
 
 )
  
@@ -22,7 +22,7 @@ cursor = conn.cursor()
  
 # Local folder path with PDFs
 
-pdf_folder = r"C:\Users\solas\OneDrive\Desktop\resume"
+pdf_folder = r"C:\Users\m143n\Downloads\resume"
  
 # Loop through all PDF files
 for filename in os.listdir(pdf_folder):
