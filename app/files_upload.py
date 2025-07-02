@@ -1,11 +1,14 @@
-from fastapi import FastAPI, UploadFile, File, Query
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, UploadFile, File, Query, Path, Body
+from fastapi.responses import JSONResponse, StreamingResponse
 from typing import List
 import psycopg2
 import os
 import joblib
 import numpy as np
 import docx
+import re
+import io
+import zipfile
 from app.extractors import extract_text_from_pdf  # Adjust import as needed
 
 app = FastAPI()
@@ -51,6 +54,13 @@ def extract_text(file_bytes, filename):
     finally:
         os.remove(temp_path)
     return text
+
+def extract_experience_years(text: str):
+    # Look for patterns like "5 years", "3+ years", "2-years", etc.
+    match = re.search(r'(\d+)\s*\+?\s*[-]?\s*years?', text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return "Fresher"
 
 @app.post("/api/resumes/upload")
 async def upload_resumes(files: List[UploadFile] = File(...)):
@@ -190,10 +200,10 @@ def get_resumes(
     for row in rows:
         resume_id, filename, upload_date = row
 
-        # Fetch parsed data from resume_embeddings if available
+        # Fetch parsed data and resume_text from resume_embeddings if available
         cursor.execute(
             """
-            SELECT name
+            SELECT name, resume_text
             FROM resume_embeddings
             WHERE file_name = %s
             LIMIT 1
@@ -202,14 +212,21 @@ def get_resumes(
         )
         parsed = cursor.fetchone()
         if parsed:
+            name, resume_text = parsed
+            experience_years = extract_experience_years(resume_text or "")
             parsed_data = {
-                "name": parsed[0],
-                "email": f"{parsed[0].lower().replace(' ', '')}@example.com",
+                "name": name,
+                "email": f"{name.lower().replace(' ', '')}@example.com",
                 "skills": ["Python", "React"],
-                "experience_years": 5  # You can update this logic as needed
+                "experience_years": experience_years
             }
         else:
-            parsed_data = None
+            parsed_data = {
+                "name": None,
+                "email": None,
+                "skills": [],
+                "experience_years": "Fresher"
+            }
 
         resumes.append({
             "id": f"resume_{resume_id}",
@@ -234,4 +251,99 @@ def get_resumes(
             }
         }
     }
+
+@app.get("/api/resumes/{resume_id}/download")
+def download_resume(
+    resume_id: str = Path(..., description="Resume ID, e.g., resume_1"),
+    format: str = Query("pdf", description="Download format (default: pdf)")
+):
+    # Extract numeric ID from "resume_1"
+    try:
+        db_id = int(resume_id.replace("resume_", ""))
+    except Exception:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "message": "Invalid resume ID format"}
+        )
+
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT filename, content FROM pdf_file WHERE id = %s",
+        (db_id,)
+    )
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
+
+    if not row:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": "Resume not found"}
+        )
+
+    filename, file_data = row
+    # You can add logic for other formats if needed
+    content_type = "application/pdf" if filename.lower().endswith(".pdf") else "application/octet-stream"
+    return StreamingResponse(
+        iter([file_data]),
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        }
+    )
+
+@app.post("/api/resumes/download-all")
+async def download_all_resumes(
+    body: dict = Body(...),
+    format: str = Query("zip", description="Download format (default: zip)")
+):
+    resume_ids = body.get("resume_ids", None)
+
+    conn = get_db_conn()
+    cursor = conn.cursor()
+
+    # If resume_ids is provided, filter by those IDs; else, get all
+    if resume_ids:
+        db_ids = []
+        for rid in resume_ids:
+            try:
+                db_ids.append(int(rid.replace("resume_", "")))
+            except Exception:
+                continue
+        if not db_ids:
+            cursor.close()
+            conn.close()
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": "No valid resume IDs provided"}
+            )
+        sql = "SELECT filename, content FROM pdf_file WHERE id = ANY(%s)"
+        cursor.execute(sql, (db_ids,))
+    else:
+        cursor.execute("SELECT filename, content FROM pdf_file")
+    rows = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    if not rows:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": "No resumes found"}
+        )
+
+    # Create ZIP in memory
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for filename, file_data in rows:
+            zipf.writestr(filename, file_data)
+    zip_buffer.seek(0)
+
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="all_resumes.zip"'
+        }
+    )
 
