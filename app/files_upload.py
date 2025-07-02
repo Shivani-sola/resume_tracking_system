@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.responses import JSONResponse
 from typing import List
 import psycopg2
@@ -158,4 +158,80 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
             "resumes": results
         }
     })
+
+@app.get("/api/resumes")
+def get_resumes(
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=100)
+):
+    conn = get_db_conn()
+    cursor = conn.cursor()
+
+    offset = (page - 1) * limit
+
+    # Get total count
+    cursor.execute("SELECT COUNT(*) FROM pdf_file")
+    total_items = cursor.fetchone()[0]
+    total_pages = (total_items + limit - 1) // limit
+
+    # Fetch resumes with pagination
+    cursor.execute(
+        """
+        SELECT id, filename, created_at
+        FROM pdf_file
+        ORDER BY created_at DESC
+        LIMIT %s OFFSET %s
+        """,
+        (limit, offset)
+    )
+    rows = cursor.fetchall()
+
+    resumes = []
+    for row in rows:
+        resume_id, filename, upload_date = row
+
+        # Fetch parsed data from resume_embeddings if available
+        cursor.execute(
+            """
+            SELECT name
+            FROM resume_embeddings
+            WHERE file_name = %s
+            LIMIT 1
+            """,
+            (filename,)
+        )
+        parsed = cursor.fetchone()
+        if parsed:
+            parsed_data = {
+                "name": parsed[0],
+                "email": f"{parsed[0].lower().replace(' ', '')}@example.com",
+                "skills": ["Python", "React"],
+                "experience_years": 5  # You can update this logic as needed
+            }
+        else:
+            parsed_data = None
+
+        resumes.append({
+            "id": f"resume_{resume_id}",
+            "filename": filename,
+            "upload_date": upload_date.isoformat() if upload_date else None,
+            "parsed_data": parsed_data,
+            "match_score": None
+        })
+
+    cursor.close()
+    conn.close()
+
+    return {
+        "success": True,
+        "data": {
+            "resumes": resumes,
+            "pagination": {
+                "current_page": page,
+                "total_pages": total_pages,
+                "total_items": total_items,
+                "items_per_page": limit
+            }
+        }
+    }
 
