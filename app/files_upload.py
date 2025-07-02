@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
 from typing import List
 import psycopg2
@@ -10,7 +10,6 @@ from app.extractors import extract_text_from_pdf  # Adjust import as needed
 
 app = FastAPI()
 
-# DB connection info
 DB_CONFIG = {
     "host": "localhost",
     "port": 5432,
@@ -26,13 +25,11 @@ def get_db_conn():
     return psycopg2.connect(**DB_CONFIG)
 
 def parse_resume(file_bytes, filename):
-    # Dummy parser for demonstration
-    # Replace with actual parsing logic
     name = os.path.splitext(filename)[0].replace("_", " ").title()
     return {
         "name": name,
         "email": f"{name.lower().replace(' ', '')}@example.com",
-        "skills": ["Python", "React", "SQL"]
+        "skills": ["Python", "React"]
     }
 
 def extract_text(file_bytes, filename):
@@ -58,31 +55,35 @@ def extract_text(file_bytes, filename):
 @app.post("/api/resumes/upload")
 async def upload_resumes(files: List[UploadFile] = File(...)):
     print("Upload endpoint called")
-    uploaded = []
-    failed = 0
+    results = []
+    failed_details = []
 
     # Load embedding models once
     tfidf = joblib.load("embeddings/tfidf.joblib")
     svd = joblib.load("embeddings/svd.joblib")
 
     conn = get_db_conn()
-    print("DB connection established")
     cursor = conn.cursor()
-    print("DB cursor created")
 
-    for idx, file in enumerate(files):
-        print(f"Processing file: {file.filename}")
+    for file in files:
+        file_result = {"filename": file.filename}
         ext = os.path.splitext(file.filename)[1].lower()
+
+        # Validation: file type
         if ext not in SUPPORTED_TYPES:
-            print(f"Unsupported file type: {file.filename}")
-            failed += 1
+            file_result["upload_status"] = "failed"
+            file_result["error"] = "Unsupported file format"
+            failed_details.append({"file": file.filename, "reason": "Unsupported file type"})
+            results.append(file_result)
             continue
 
         contents = await file.read()
-        print(f"Read file: {file.filename}, size: {len(contents)} bytes")
+        # Validation: file size
         if len(contents) > MAX_FILE_SIZE:
-            print(f"File too large: {file.filename}")
-            failed += 1
+            file_result["upload_status"] = "failed"
+            file_result["error"] = "File size exceeds 10MB"
+            failed_details.append({"file": file.filename, "reason": "File size exceeds 10MB"})
+            results.append(file_result)
             continue
 
         try:
@@ -92,14 +93,10 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
                 (file.filename, psycopg2.Binary(contents))
             )
             resume_id = cursor.fetchone()[0]
-            print(f"Inserted file: {file.filename} with id {resume_id}")
             parsed_data = parse_resume(contents, file.filename)
 
             # Extract text for embedding
             text = extract_text(contents, file.filename)
-            print(f"Extracted text for {file.filename}: {text[:100]}...")
-
-            # Generate embedding if text is not empty
             if text.strip():
                 tfidf_vec = tfidf.transform([text])
                 svd_vec = svd.transform(tfidf_vec)
@@ -119,31 +116,46 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
                         file.filename
                     )
                 )
-                print(f"Saved embedding for {file.filename}")
 
-            uploaded.append({
+            file_result.update({
                 "id": f"resume_{resume_id}",
-                "filename": file.filename,
                 "upload_status": "success",
                 "parsed_data": parsed_data
             })
         except Exception as e:
             print(f"Error processing file {file.filename}: {e}")
             conn.rollback()
-            failed += 1
+            file_result["upload_status"] = "failed"
+            file_result["error"] = str(e)
+            failed_details.append({"file": file.filename, "reason": str(e)})
+        results.append(file_result)
 
     conn.commit()
     cursor.close()
     conn.close()
-    print("DB connection closed")
 
+    uploaded_count = sum(1 for r in results if r.get("upload_status") == "success")
+    failed_count = sum(1 for r in results if r.get("upload_status") == "failed")
+
+    # If all failed, return error response
+    if uploaded_count == 0:
+        return JSONResponse({
+            "success": False,
+            "message": "Resume upload failed due to validation error",
+            "error": {
+                "code": "VALIDATION_ERROR",
+                "details": failed_details
+            }
+        })
+
+    # Otherwise, return normal response
     return JSONResponse({
         "success": True,
         "message": "Files uploaded successfully",
         "data": {
-            "uploaded_count": len(uploaded),
-            "failed_count": failed,
-            "resumes": uploaded
+            "uploaded_count": uploaded_count,
+            "failed_count": failed_count,
+            "resumes": results
         }
     })
 
