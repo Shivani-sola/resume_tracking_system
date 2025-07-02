@@ -1,6 +1,7 @@
-from fastapi import FastAPI, UploadFile, File, Query, Path, Body
+from fastapi import FastAPI, UploadFile, File, Query, Path, Body, Form
 from fastapi.responses import JSONResponse, StreamingResponse
-from typing import List
+from fastapi import APIRouter
+from typing import List, Optional, Dict, Any
 import psycopg2
 import os
 import joblib
@@ -12,6 +13,7 @@ import zipfile
 from app.extractors import extract_text_from_pdf  # Adjust import as needed
 
 app = FastAPI()
+router = APIRouter()
 
 DB_CONFIG = {
     "host": "localhost",
@@ -346,4 +348,163 @@ async def download_all_resumes(
             "Content-Disposition": 'attachment; filename="all_resumes.zip"'
         }
     )
+
+def extract_jd_requirements(jd_text: str) -> dict:
+    # Dummy extraction logic; replace with real NLP as needed
+    return {
+        "required_skills": ["Python", "Django", "SQL"],
+        "preferred_skills": ["Docker", "AWS"],
+        "experience_years": 5,
+        "education": "Bachelor's degree in Computer Science"
+    }
+
+def get_job_category_and_seniority(jd_text: str) -> (str, str):
+    # Dummy logic; replace with real classification if needed
+    return "Software Development", "Senior"
+
+@router.post("/api/jobs/process-text-and-match")
+async def process_text_and_match(
+    body: Dict[str, Any] = Body(...)
+):
+    jd_text = body.get("job_description")
+    title = body.get("title", "Job")
+    resume_ids = body.get("resume_ids", None)
+
+    # 1. Extract requirements and meta info from JD
+    requirements = extract_jd_requirements(jd_text)
+    job_category, seniority_level = get_job_category_and_seniority(jd_text)
+
+    # 2. Generate JD embedding
+    tfidf = joblib.load("embeddings/tfidf.joblib")
+    svd = joblib.load("embeddings/svd.joblib")
+    jd_vec = svd.transform(tfidf.transform([jd_text]))[0]
+
+    # 3. Fetch resumes to match
+    conn = get_db_conn()
+    cursor = conn.cursor()
+    if resume_ids:
+        db_ids = [int(rid.replace("resume_", "")) for rid in resume_ids]
+        cursor.execute("SELECT id, file_name, resume_text, embedding, name FROM resume_embeddings WHERE id = ANY(%s)", (db_ids,))
+    else:
+        cursor.execute("SELECT id, file_name, resume_text, embedding, name FROM resume_embeddings")
+    resumes = cursor.fetchall()
+    cursor.close()
+    conn.close()
+
+    matched_resumes = []
+    total_score = 0
+    for rid, filename, resume_text, embedding, name in resumes:
+        # Convert embedding to numpy array
+        if isinstance(embedding, str):
+            emb = np.array(eval(embedding))
+        else:
+            emb = np.array(embedding, dtype=np.float32)
+        if emb.shape != jd_vec.shape:
+            continue  # skip if shape mismatch
+        sim = float(np.dot(jd_vec, emb) / (np.linalg.norm(jd_vec) * np.linalg.norm(emb)))
+        match_score = round(sim * 100, 1)
+        total_score += match_score
+
+        # Dummy skill matching logic
+        resume_skills = ["Python", "React", "SQL", "JavaScript"]
+
+        required_skills = requirements["required_skills"]
+        matching_skills = [s for s in required_skills if s in resume_skills]
+        missing_skills = [s for s in required_skills if s not in resume_skills]
+
+        # Skill match percentage
+        if required_skills:
+            skills_match_pct = int(len(matching_skills) / len(required_skills) * 100)
+        else:
+            skills_match_pct = 0
+
+        # Overall fit logic
+        if skills_match_pct >= 80:
+            overall_fit = "Excellent"
+        elif skills_match_pct >= 70:
+            overall_fit = "Good"
+        else:
+            overall_fit = "Average"
+
+        match_details = {
+            "skills_match": skills_match_pct,
+            "experience_match": 80,  # You can add real logic here
+            "overall_fit": overall_fit
+        }
+
+        parsed_data = {
+            "name": name,
+            "email": f"{name.lower().replace(' ', '')}@example.com",
+            "skills": resume_skills,
+            "experience_years": requirements["experience_years"]
+        }
+
+        matched_resumes.append({
+            "id": f"resume_{rid}",
+            "filename": filename,
+            "match_score": match_score,
+            "match_details": match_details,
+            "parsed_data": parsed_data,
+            "missing_skills": missing_skills,
+            "matching_skills": matching_skills
+        })
+
+    avg_score = round(total_score / len(matched_resumes), 1) if matched_resumes else 0
+
+    return {
+        "success": True,
+        "message": "Job description processed and resumes matched successfully",
+        "data": {
+            "job_analysis": {
+                "title": title,
+                "processed_description": jd_text,
+                "extracted_requirements": requirements,
+                "job_category": job_category,
+                "seniority_level": seniority_level
+            },
+            "matched_resumes": matched_resumes,
+            "total_matched": len(matched_resumes),
+            "average_score": avg_score
+        }
+    }
+
+@router.post("/api/jobs/process-file-and-match")
+async def process_file_and_match(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    resume_ids: Optional[str] = Form(None)
+):
+    # Save file temporarily
+    ext = os.path.splitext(file.filename)[1].lower()
+    temp_path = f"temp_jd{ext}"
+    with open(temp_path, "wb") as f:
+        f.write(await file.read())
+
+    # Extract text
+    if ext == ".pdf":
+        jd_text = extract_text_from_pdf(temp_path)
+    elif ext == ".docx":
+        doc = docx.Document(temp_path)
+        jd_text = "\n".join([para.text for para in doc.paragraphs])
+    elif ext == ".txt":
+        with open(temp_path, "r", encoding="utf-8", errors="ignore") as f2:
+            jd_text = f2.read()
+    else:
+        jd_text = ""
+    os.remove(temp_path)
+
+    # Parse resume_ids if provided
+    resume_ids_list = None
+    if resume_ids:
+        import json
+        resume_ids_list = json.loads(resume_ids)
+
+    # Call the text-based endpoint logic
+    return await process_text_and_match({
+        "job_description": jd_text,
+        "title": title or "Job",
+        "resume_ids": resume_ids_list
+    })
+
+app.include_router(router)
 
