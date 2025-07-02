@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS resumes_storage (
+CREATE TABLE IF NOT EXISTS resume_embeddings (
     id SERIAL PRIMARY KEY,
     name TEXT,
     resume_text TEXT,

@@ -5,6 +5,7 @@ from app.vectorizer import train_models
 from sqlalchemy import text
 from app.db import engine
 from app.extractors import extract_text_from_pdf
+from sklearn.decomposition import TruncatedSVD
 
 # Collect all resume texts from your database
 with engine.begin() as conn:
@@ -22,5 +23,6 @@ for pdf in pdfs:
 
 # Train and save models
 os.makedirs("embeddings", exist_ok=True)
+svd = TruncatedSVD(n_components=300)
 train_models(texts, "embeddings/tfidf.joblib", "embeddings/svd.joblib")
 print("Models trained and saved.")

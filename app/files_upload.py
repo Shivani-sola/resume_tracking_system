@@ -3,6 +3,10 @@ from fastapi.responses import JSONResponse
 from typing import List
 import psycopg2
 import os
+import joblib
+import numpy as np
+import docx
+from app.extractors import extract_text_from_pdf  # Adjust import as needed
 
 app = FastAPI()
 
@@ -31,11 +35,35 @@ def parse_resume(file_bytes, filename):
         "skills": ["Python", "React", "SQL"]
     }
 
+def extract_text(file_bytes, filename):
+    ext = os.path.splitext(filename)[1].lower()
+    temp_path = f"temp_upload{ext}"
+    with open(temp_path, "wb") as f:
+        f.write(file_bytes)
+    try:
+        if ext == ".pdf":
+            text = extract_text_from_pdf(temp_path)
+        elif ext == ".docx":
+            doc = docx.Document(temp_path)
+            text = "\n".join([para.text for para in doc.paragraphs])
+        elif ext == ".txt":
+            with open(temp_path, "r", encoding="utf-8", errors="ignore") as f2:
+                text = f2.read()
+        else:
+            text = ""
+    finally:
+        os.remove(temp_path)
+    return text
+
 @app.post("/api/resumes/upload")
 async def upload_resumes(files: List[UploadFile] = File(...)):
     print("Upload endpoint called")
     uploaded = []
     failed = 0
+
+    # Load embedding models once
+    tfidf = joblib.load("embeddings/tfidf.joblib")
+    svd = joblib.load("embeddings/svd.joblib")
 
     conn = get_db_conn()
     print("DB connection established")
@@ -58,6 +86,7 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
             continue
 
         try:
+            # Save file to pdf_file table
             cursor.execute(
                 "INSERT INTO pdf_file (filename, content) VALUES (%s, %s) RETURNING id",
                 (file.filename, psycopg2.Binary(contents))
@@ -65,6 +94,33 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
             resume_id = cursor.fetchone()[0]
             print(f"Inserted file: {file.filename} with id {resume_id}")
             parsed_data = parse_resume(contents, file.filename)
+
+            # Extract text for embedding
+            text = extract_text(contents, file.filename)
+            print(f"Extracted text for {file.filename}: {text[:100]}...")
+
+            # Generate embedding if text is not empty
+            if text.strip():
+                tfidf_vec = tfidf.transform([text])
+                svd_vec = svd.transform(tfidf_vec)
+                embedding = svd_vec[0].tolist()  # VECTOR(300) expects a list/array
+
+                # Save to resumes_embeddings table
+                cursor.execute(
+                    """
+                    INSERT INTO resume_embeddings (name, resume_text, embedding, file_data, file_name)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        parsed_data["name"],
+                        text,
+                        embedding,
+                        psycopg2.Binary(contents),
+                        file.filename
+                    )
+                )
+                print(f"Saved embedding for {file.filename}")
+
             uploaded.append({
                 "id": f"resume_{resume_id}",
                 "filename": file.filename,
