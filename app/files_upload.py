@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Query, Path, Body, Form
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi import APIRouter
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional, Dict, Any
 import psycopg2
 import os
@@ -14,6 +15,15 @@ from app.extractors import extract_text_from_pdf  # Adjust import as needed
 
 app = FastAPI()
 router = APIRouter()
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or specify your UI's URL for more security
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 DB_CONFIG = {
     "host": "localhost",
@@ -63,6 +73,54 @@ def extract_experience_years(text: str):
     if match:
         return int(match.group(1))
     return "Fresher"
+
+def extract_summary(text: str, max_chars: int = 1000) -> str:
+    """
+    Extracts the professional summary or similar section from the resume text.
+    Falls back to the first few sentences if no section is found.
+    """
+    if not text:
+        return ""
+    section_match = re.search(
+        r'(summary|career objective|professional summary|profile|objective)\s*[:\-\n]+',
+        text, re.IGNORECASE
+    )
+    if section_match:
+        start_idx = section_match.end()
+        after = text[start_idx:]
+        next_section = re.search(r'\n\s*(education|academic|experience|work experience|professional experience|projects|skills|certifications|contact|personal information)\b', after, re.IGNORECASE)
+        if next_section:
+            summary = after[:next_section.start()]
+        else:
+            summary = after[:max_chars]
+        return summary.strip()
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    return " ".join(sentences[:3])
+
+def extract_skills(text: str) -> list:
+    """
+    Extracts skills from resume text using a predefined list of common skills.
+    """
+    if not text:
+        return []
+    # Only extract from the skills section, not from the whole text
+    text_lower = text.lower()
+    # Look for a skills section
+    match = re.search(r'(skills|technical skills|key skills)\s*[:\-\n]+([\s\S]{0,500})', text_lower)
+    if match:
+        section = match.group(2)
+        # Stop at the next major section header if present
+        next_section = re.search(r'\n\s*(education|academic|experience|work experience|professional experience|projects|certifications|contact|personal information)\b', section, re.IGNORECASE)
+        if next_section:
+            section = section[:next_section.start()]
+        # Split by common delimiters
+        possible_skills = re.split(r'[\n,;•\-\u2022]', section)
+        # Clean and filter
+        skills = [s.strip().title() for s in possible_skills if s.strip() and len(s.strip()) < 40]
+        # Remove duplicates and empty
+        skills = sorted(set(skills))
+        return skills
+    return []
 
 @app.post("/api/resumes/upload")
 async def upload_resumes(files: List[UploadFile] = File(...)):
@@ -178,14 +236,14 @@ def get_resumes(
 ):
     conn = get_db_conn()
     cursor = conn.cursor()
-
+ 
     offset = (page - 1) * limit
-
+ 
     # Get total count
     cursor.execute("SELECT COUNT(*) FROM pdf_file")
     total_items = cursor.fetchone()[0]
     total_pages = (total_items + limit - 1) // limit
-
+ 
     # Fetch resumes with pagination
     cursor.execute(
         """
@@ -197,11 +255,11 @@ def get_resumes(
         (limit, offset)
     )
     rows = cursor.fetchall()
-
+ 
     resumes = []
     for row in rows:
         resume_id, filename, upload_date = row
-
+ 
         # Fetch parsed data and resume_text from resume_embeddings if available
         cursor.execute(
             """
@@ -216,11 +274,60 @@ def get_resumes(
         if parsed:
             name, resume_text = parsed
             experience_years = extract_experience_years(resume_text or "")
+            
+            # Extract summary/career objective up to (but not including) Education section
+            def extract_resume_summary(text):
+                import re
+                if not text:
+                    return None
+                summary_patterns = [
+                    r'(?:summary|career objective|professional summary|profile|objective)\s*[:\-\n]+(.{0,1000})',
+                ]
+                for pat in summary_patterns:
+                    m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
+                    if m:
+                        summary = m.group(1)
+                        summary = re.split(r'\n+\s*(Education|EDUCATION|Academic|ACADEMIC)\b', summary)[0]
+                        return summary.strip()
+                summary = re.split(r'\n+\s*(Education|EDUCATION|Academic|ACADEMIC)\b', text)[0]
+                return summary.strip()[:400]
+ 
+            # Extract skills using pyresparser if available, else fallback to regex
+            def extract_skills(text):
+                try:
+                    from pyresparser import ResumeParser
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.txt', mode='w', encoding='utf-8') as temp:
+                        temp.write(text)
+                        temp_path = temp.name
+                    data = ResumeParser(temp_path).get_extracted_data()
+                    os.remove(temp_path)
+                    skills = data.get('skills')
+                    if skills:
+                        return skills
+                except Exception as e:
+                    print(f"Skill extraction failed: {e}")
+                # Fallback: simple regex for common skills
+                common_skills = [
+                    'python', 'java', 'c++', 'c#', 'javascript', 'react', 'node', 'sql', 'html', 'css', 'aws', 'docker',
+                    'django', 'flask', 'angular', 'typescript', 'git', 'linux', 'excel', 'pandas', 'numpy', 'machine learning',
+                    'deep learning', 'nlp', 'tensorflow', 'keras', 'pytorch', 'tableau', 'power bi', 'spark', 'hadoop', 'scala',
+                    'php', 'ruby', 'go', 'swift', 'kotlin', 'android', 'ios', 'rest', 'graphql', 'mongodb', 'postgresql', 'mysql'
+                ]
+                found = set()
+                for skill in common_skills:
+                    if re.search(r'\b' + re.escape(skill) + r'\b', text, re.IGNORECASE):
+                        found.add(skill.title())
+                return sorted(found)
+ 
+            description = extract_resume_summary(resume_text)
+            skills = extract_skills(resume_text or "")
             parsed_data = {
                 "name": name,
                 "email": f"{name.lower().replace(' ', '')}@example.com",
-                "skills": ["Python", "React"],
-                "experience_years": experience_years
+                "skills": skills,
+                "experience_years": experience_years,
+                "description": description
             }
         else:
             parsed_data = {
@@ -229,7 +336,7 @@ def get_resumes(
                 "skills": [],
                 "experience_years": "Fresher"
             }
-
+ 
         resumes.append({
             "id": f"resume_{resume_id}",
             "filename": filename,
@@ -237,10 +344,10 @@ def get_resumes(
             "parsed_data": parsed_data,
             "match_score": None
         })
-
+ 
     cursor.close()
     conn.close()
-
+ 
     return {
         "success": True,
         "data": {
@@ -507,4 +614,3 @@ async def process_file_and_match(
     })
 
 app.include_router(router)
-
