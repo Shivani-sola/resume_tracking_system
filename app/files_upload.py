@@ -114,13 +114,14 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
                 svd_vec = svd.transform(tfidf_vec)
                 embedding = svd_vec[0].tolist()  # VECTOR(300) expects a list/array
 
-                # Save to resumes_embeddings table
+                # Save to resume_embeddings table with pdf_id
                 cursor.execute(
                     """
-                    INSERT INTO resume_embeddings (name, resume_text, embedding, file_data, file_name)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO resume_embeddings (pdf_id, name, resume_text, embedding, file_data, file_name)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
+                        resume_id,
                         parsed_data["name"],
                         text,
                         embedding,
@@ -222,7 +223,7 @@ def get_resumes(
                 if not text:
                     return None
                 summary_patterns = [
-                    r'(?:summary|career objective|professional summary|profile|objective)\s*[:\-\n]+(.{0,1000})',
+                    r'(?:summary|career objective|professional summary|profile|objective statement)\s*[:\-\n]+(.{0,1000})',
                 ]
                 for pat in summary_patterns:
                     m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
@@ -263,9 +264,18 @@ def get_resumes(
 
             description = extract_resume_summary(resume_text)
             skills = extract_skills(resume_text or "")
+            # Extract email from resume text
+            def extract_email(text):
+                import re
+                if not text:
+                    return None
+                matches = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+                return matches[0] if matches else None
+
+            email = extract_email(resume_text or "")
             parsed_data = {
                 "name": name,
-                "email": f"{name.lower().replace(' ', '')}@example.com",
+                "email": email,
                 "skills": skills,
                 "experience_years": experience_years,
                 "description": description
