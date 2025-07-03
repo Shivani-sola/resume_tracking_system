@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy import text, create_engine
 from typing import List, Optional
 from app.db import engine
+from app.vectorizer import load_models
 import os
 import io
 import pdfplumber
@@ -14,6 +15,7 @@ import tempfile
 import json
 import re
 import joblib
+import spacy
 
 app = FastAPI(title="Resume Matching API")
 
@@ -28,17 +30,24 @@ app.add_middleware(
 # --------------------
 # Configuration
 # --------------------
-DB_URI = "postgresql://postgres:sgowrav%401@localhost:5433/postgres"
+DB_URI = "postgresql://postgres:sgowrav%401@localhost:5432/postgres"
 engine = create_engine(DB_URI)
 
 # --------------------
 # Load Models
 # --------------------
-tfidf = joblib.load("embeddings/tfidf.joblib")
-svd = joblib.load("embeddings/svd.joblib")
+tfidf, svd, vectorizer_transform = load_models("embeddings/tfidf.joblib", "embeddings/svd.joblib", n_components=300)
 
 SUPPORTED_TYPES = {".pdf", ".doc", ".docx", ".txt"}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+# Load spaCy model once (at module level)
+nlp = spacy.load("en_core_web_sm")
+
+# Load a large list of skills from a file
+skills_file = os.path.join(os.path.dirname(__file__), "skills_master_list.txt")
+with open(skills_file, "r", encoding="utf-8") as f:
+    skills_list = [line.strip() for line in f if line.strip()]
 
 # Dummy parser for demonstration
 # Replace with actual parsing logic
@@ -48,10 +57,34 @@ def extract_email(text):
     return match.group(0) if match else None
 
 def extract_skills(text):
-    # Example: look for common skills
-    skills_list = ["Python", "React", "SQL", "JavaScript", "Django", "Docker", "AWS"]
-    found = [skill for skill in skills_list if skill.lower() in text.lower()]
-    return found
+    doc = nlp(text)
+    found = set()
+    text_lower = text.lower()
+    # 1. Try to extract from a 'Skills' section
+    import re
+    skills_section = None
+    # Look for 'Skills' or similar section headers
+    section_match = re.search(r'(skills|technical skills|key skills|core skills)\s*[:\-\n]+(.+?)(\n\s*\n|$)', text, re.IGNORECASE | re.DOTALL)
+    if section_match:
+        skills_section = section_match.group(2)
+        # Split by line or comma/semicolon
+        possible_skills = re.split(r'[\n,;•\u2022]', skills_section)
+        for skill_candidate in possible_skills:
+            skill_candidate = skill_candidate.strip()
+            for skill in skills_list:
+                if skill.lower() == skill_candidate.lower():
+                    found.add(skill)
+    # 2. Fallback: match skills in the whole text (as before)
+    for skill in skills_list:
+        pattern = r'\\b' + re.escape(skill.lower()) + r'\\b'
+        if re.search(pattern, text_lower):
+            found.add(skill)
+    # 3. Optionally, add noun chunks that look like skills
+    for chunk in doc.noun_chunks:
+        chunk_text = chunk.text.strip()
+        if chunk_text in skills_list:
+            found.add(chunk_text)
+    return list(found)
 
 def extract_experience_years(text):
     match = re.search(r"(\d+)\+?\s*(years|yrs)\s+of\s+experience", text, re.IGNORECASE)
@@ -110,7 +143,9 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
     failed = []
     for file in files:
         ext = os.path.splitext(file.filename)[1].lower()
+        print(f"[DEBUG] Processing file: {file.filename}, ext: {ext}")
         if ext not in SUPPORTED_TYPES:
+            print(f"[DEBUG] Unsupported file type: {ext}")
             failed.append({
                 "filename": file.filename,
                 "upload_status": "failed",
@@ -118,7 +153,9 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
             })
             continue
         contents = await file.read()
+        print(f"[DEBUG] File size: {len(contents)} bytes")
         if len(contents) > MAX_FILE_SIZE:
+            print(f"[DEBUG] File too large: {file.filename}")
             failed.append({
                 "filename": file.filename,
                 "upload_status": "failed",
@@ -136,11 +173,28 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
             elif ext == ".docx":
                 doc = DocxDoc(tmp_path)
                 text_content = "\n".join([para.text for para in doc.paragraphs])
+            elif ext == ".txt":
+                with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f:
+                    text_content = f.read()
             else:
                 text_content = ""
-        except Exception:
+            print(f"[DEBUG] Extracted text length: {len(text_content)}")
+        except Exception as e:
+            print(f"[DEBUG] Text extraction failed: {e}")
             text_content = ""
         os.remove(tmp_path)
+        # Generate embedding if text is available
+        embedding_str = None
+        if text_content.strip():
+            try:
+                vec = vectorizer_transform([text_content])[0]
+                print(f"[DEBUG] Embedding shape: {vec.shape}, sample: {vec[:5]}")
+                embedding_str = '[' + ','.join(map(str, vec)) + ']'
+            except Exception as e:
+                print(f"[DEBUG] Embedding generation failed: {e}")
+                embedding_str = None
+        else:
+            print(f"[DEBUG] No text extracted for embedding.")
         try:
             name = os.path.splitext(file.filename)[0].replace("_", " ").title()
             with engine.begin() as conn:
@@ -153,15 +207,14 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
                     {
                         "name": name,
                         "resume_text": text_content,
-                        "embedding": None,
+                        "embedding": embedding_str,
                         "file_data": contents,
                         "file_name": file.filename
                     }
                 )
                 resume_id = result.scalar()
+            print(f"[DEBUG] Inserted into DB with id: {resume_id}")
             parsed_data = parse_resume(contents, file.filename, text_content)
-            # Remove experience_years if you want the response to match your example
-            parsed_data.pop("experience_years", None)
             uploaded.append({
                 "id": get_resume_id(resume_id),
                 "filename": file.filename,
@@ -169,6 +222,7 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
                 "parsed_data": parsed_data
             })
         except Exception as e:
+            print(f"[DEBUG] DB insert failed: {e}")
             failed.append({
                 "filename": file.filename,
                 "upload_status": "failed",
@@ -254,11 +308,30 @@ def download_resume(resume_id: str, format: str = Query("pdf")):
 
 @app.post("/api/resumes/download-all")
 def download_all_resumes(body: dict = Body(...), format: str = Query("zip")):
-    # This is a stub. Implement ZIP creation as needed.
-    return JSONResponse({
-        "success": False,
-        "message": "Not implemented",
-        "error": {"code": "NOT_IMPLEMENTED"}
+    import zipfile
+    import io
+    resume_ids = body.get("resume_ids", None)
+    # Get all resumes or filter by IDs
+    with engine.begin() as conn:
+        if resume_ids:
+            db_ids = [int(rid.replace("resume_", "")) for rid in resume_ids]
+            rows = conn.execute(text("SELECT file_name, file_data FROM resumes_storage WHERE id = ANY(:ids)"), {"ids": db_ids}).fetchall()
+        else:
+            rows = conn.execute(text("SELECT file_name, file_data FROM resumes_storage")).fetchall()
+    if not rows:
+        return JSONResponse({
+            "success": False,
+            "message": "No resumes found to download",
+            "error": {"code": "NO_RESUMES"}
+        }, status_code=404)
+    # Create ZIP in memory
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for file_name, file_data in rows:
+            zipf.writestr(file_name, file_data)
+    zip_buffer.seek(0)
+    return StreamingResponse(zip_buffer, media_type="application/zip", headers={
+        "Content-Disposition": "attachment; filename=all_resumes.zip"
     })
 
 @app.post("/api/resumes/upload-urls")
@@ -295,10 +368,10 @@ def process_text_and_match(body: dict = Body(...)):
     job_title = body.get("title", "Job")
     job_description = body.get("job_description", "")
     resume_ids = body.get("resume_ids", None)
-    # Extract requirements from JD
+    # Extract requirements from JD using real logic
     required_skills = extract_skills(job_description)
     experience_years = extract_experience_years(job_description)
-    education = None  # You can add logic to extract education if needed
+    education = None  # TODO: implement extraction if needed
     job_analysis = {
         "title": job_title,
         "processed_description": job_description,
@@ -312,7 +385,7 @@ def process_text_and_match(body: dict = Body(...)):
         "seniority_level": None
     }
     # Generate JD embedding
-    jd_vec = svd.transform(tfidf.transform([job_description]))[0]
+    jd_vec = vectorizer_transform([job_description])[0]
     # Get all resumes or filter by IDs
     with engine.begin() as conn:
         if resume_ids:
@@ -327,22 +400,45 @@ def process_text_and_match(body: dict = Body(...)):
         db_id, file_name, resume_text, emb_str = row
         parsed_data = parse_resume(b"", file_name, resume_text)
         # Compute similarity if embedding exists
+        sim = None
         if emb_str:
-            emb = np.array(eval(emb_str))
-            sim = float(np.dot(jd_vec, emb) / (np.linalg.norm(jd_vec) * np.linalg.norm(emb)))
-        else:
-            sim = None
+            try:
+                import numpy as np
+                emb = np.array(eval(emb_str))
+                sim = float(np.dot(jd_vec, emb) / (np.linalg.norm(jd_vec) * np.linalg.norm(emb)))
+                # Scale similarity to 0-100 for frontend
+                sim = round(sim * 100, 1)
+            except Exception:
+                sim = None
         # Skill matching
-        matching_skills = list(set(required_skills) & set(parsed_data["skills"]))
-        missing_skills = list(set(required_skills) - set(parsed_data["skills"]))
+        matching_skills = list(set(required_skills) & set(parsed_data.get("skills", [])))
+        missing_skills = list(set(required_skills) - set(parsed_data.get("skills", [])))
+        # Skill match percent
+        skills_match = int(100 * len(matching_skills) / len(required_skills)) if required_skills else 0
+        # Experience match percent
+        experience_match = None
+        if experience_years is not None and parsed_data.get("experience_years") is not None:
+            exp_ratio = parsed_data["experience_years"] / experience_years
+            experience_match = int(100 * min(exp_ratio, 1.0))
+        # Overall fit as string
+        overall_fit = None
+        if sim is not None:
+            if sim >= 80:
+                overall_fit = "Excellent"
+            elif sim >= 60:
+                overall_fit = "Good"
+            elif sim >= 40:
+                overall_fit = "Average"
+            else:
+                overall_fit = "Poor"
         matched_resumes.append({
             "id": get_resume_id(db_id),
             "filename": file_name,
             "match_score": sim,
             "match_details": {
-                "skills_match": len(matching_skills),
-                "experience_match": parsed_data.get("experience_years"),
-                "overall_fit": None
+                "skills_match": skills_match,
+                "experience_match": experience_match,
+                "overall_fit": overall_fit
             },
             "parsed_data": parsed_data,
             "missing_skills": missing_skills,
@@ -350,7 +446,7 @@ def process_text_and_match(body: dict = Body(...)):
         })
         if sim is not None:
             scores.append(sim)
-    avg_score = float(np.mean(scores)) if scores else None
+    avg_score = float(round(np.mean(scores), 1)) if scores else None
     return JSONResponse({
         "success": True,
         "message": "Job description processed and resumes matched successfully",
@@ -364,42 +460,112 @@ def process_text_and_match(body: dict = Body(...)):
 
 @app.post("/api/jobs/process-file-and-match")
 async def process_file_and_match(file: UploadFile = File(...), title: Optional[str] = Form(None), resume_ids: Optional[str] = Form(None)):
-    # Dummy implementation for demonstration
-    job_title = title or "Senior Python Developer"
-    job_description = "..."
-    ids = json.loads(resume_ids) if resume_ids else ["resume_1"]
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in SUPPORTED_TYPES:
+        return JSONResponse(status_code=400, content={"success": False, "message": "Unsupported file format", "error": {"code": "UNSUPPORTED_FORMAT"}})
+    contents = await file.read()
+    if len(contents) > MAX_FILE_SIZE:
+        return JSONResponse(status_code=400, content={"success": False, "message": "File size exceeds limit", "error": {"code": "FILE_TOO_LARGE"}})
+    # Extract text from file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+    try:
+        if ext == ".pdf":
+            with pdfplumber.open(tmp_path) as pdf:
+                job_description = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        elif ext == ".docx":
+            doc = DocxDoc(tmp_path)
+            job_description = "\n".join([para.text for para in doc.paragraphs])
+        elif ext == ".txt":
+            with open(tmp_path, "r", encoding="utf-8", errors="ignore") as f:
+                job_description = f.read()
+        else:
+            job_description = ""
+    except Exception:
+        job_description = ""
+    os.remove(tmp_path)
+    job_title = title or os.path.splitext(file.filename)[0].replace("_", " ").title()
+    # Extract requirements from JD using real logic
+    required_skills = extract_skills(job_description)
+    experience_years = extract_experience_years(job_description)
+    education = None  # TODO: implement extraction if needed
     job_analysis = {
         "title": job_title,
         "processed_description": job_description,
         "extracted_requirements": {
-            "required_skills": ["Python", "Django", "SQL"],
-            "preferred_skills": ["Docker", "AWS"],
-            "experience_years": 5,
-            "education": "Bachelor's degree in Computer Science"
+            "required_skills": required_skills,
+            "preferred_skills": [],
+            "experience_years": experience_years,
+            "education": education
         },
-        "job_category": "Software Development",
-        "seniority_level": "Senior"
+        "job_category": None,
+        "seniority_level": None
     }
-    matched_resumes = [
-        {
-            "id": rid,
-            "filename": "john_doe_resume.pdf",
-            "match_score": 85.5,
+    # Generate JD embedding
+    jd_vec = vectorizer_transform([job_description])[0]
+    # Parse resume_ids if provided
+    ids = json.loads(resume_ids) if resume_ids else None
+    # Get all resumes or filter by IDs
+    with engine.begin() as conn:
+        if ids:
+            db_ids = [int(rid.replace("resume_", "")) for rid in ids]
+            rows = conn.execute(text("SELECT id, file_name, resume_text, embedding FROM resumes_storage WHERE id = ANY(:ids)"), {"ids": db_ids}).fetchall()
+        else:
+            rows = conn.execute(text("SELECT id, file_name, resume_text, embedding FROM resumes_storage")).fetchall()
+    import numpy as np
+    matched_resumes = []
+    scores = []
+    for row in rows:
+        db_id, file_name, resume_text, emb_str = row
+        parsed_data = parse_resume(b"", file_name, resume_text)
+        # Compute similarity if embedding exists
+        sim = None
+        if emb_str:
+            try:
+                emb = np.array(eval(emb_str))
+                sim = float(np.dot(jd_vec, emb) / (np.linalg.norm(jd_vec) * np.linalg.norm(emb)))
+                # Scale similarity to 0-100 for frontend
+                sim = round(sim * 100, 1)
+            except Exception:
+                sim = None
+        # Skill matching
+        matching_skills = list(set(required_skills) & set(parsed_data.get("skills", [])))
+        missing_skills = list(set(required_skills) - set(parsed_data.get("skills", [])))
+        # Skill match percent
+        skills_match = int(100 * len(matching_skills) / len(required_skills)) if required_skills else 0
+        # Experience match percent
+        experience_match = None
+        if experience_years is not None and parsed_data.get("experience_years") is not None:
+            exp_ratio = parsed_data["experience_years"] / experience_years
+            experience_match = int(100 * min(exp_ratio, 1.0))
+        # Overall fit as string
+        overall_fit = None
+        if sim is not None:
+            if sim >= 80:
+                overall_fit = "Excellent"
+            elif sim >= 60:
+                overall_fit = "Good"
+            elif sim >= 40:
+                overall_fit = "Average"
+            else:
+                overall_fit = "Poor"
+        matched_resumes.append({
+            "id": get_resume_id(db_id),
+            "filename": file_name,
+            "match_score": sim,
             "match_details": {
-                "skills_match": 90,
-                "experience_match": 80,
-                "overall_fit": "Excellent"
+                "skills_match": skills_match,
+                "experience_match": experience_match,
+                "overall_fit": overall_fit
             },
-            "parsed_data": {
-                "name": "John Doe",
-                "email": "john@example.com",
-                "skills": ["Python", "React", "SQL", "JavaScript"],
-                "experience_years": 5
-            },
-            "missing_skills": ["Docker"],
-            "matching_skills": ["Python", "Django", "SQL"]
-        } for rid in ids
-    ]
+            "parsed_data": parsed_data,
+            "missing_skills": missing_skills,
+            "matching_skills": matching_skills
+        })
+        if sim is not None:
+            scores.append(sim)
+    avg_score = float(round(np.mean(scores), 1)) if scores else None
     return JSONResponse({
         "success": True,
         "message": "Job description processed and resumes matched successfully",
@@ -407,6 +573,6 @@ async def process_file_and_match(file: UploadFile = File(...), title: Optional[s
             "job_analysis": job_analysis,
             "matched_resumes": matched_resumes,
             "total_matched": len(matched_resumes),
-            "average_score": 85.5
+            "average_score": avg_score
         }
     })

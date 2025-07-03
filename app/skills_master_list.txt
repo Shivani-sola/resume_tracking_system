@@ -1,0 +1,290 @@
+Python
+Java
+JavaScript
+C++
+C#
+SQL
+HTML
+CSS
+React
+Angular
+Node.js
+Django
+Flask
+Spring
+Kotlin
+Swift
+Go
+Ruby
+PHP
+Perl
+Scala
+TypeScript
+R
+MATLAB
+SAS
+Tableau
+Power BI
+AWS
+Azure
+GCP
+Docker
+Kubernetes
+TensorFlow
+PyTorch
+Pandas
+NumPy
+Scikit-learn
+NLTK
+OpenCV
+Hadoop
+Spark
+Linux
+Unix
+Git
+Jenkins
+CI/CD
+REST
+GraphQL
+NoSQL
+MongoDB
+PostgreSQL
+MySQL
+Oracle
+Firebase
+Redis
+Elasticsearch
+RabbitMQ
+Kafka
+Jira
+Agile
+Scrum
+Kanban
+Trello
+Figma
+Photoshop
+Illustrator
+AutoCAD
+SolidWorks
+SAP
+Salesforce
+WordPress
+Shopify
+Magento
+SEO
+SEM
+Content Writing
+Copywriting
+Public Speaking
+Project Management
+Business Analysis
+Data Analysis
+Machine Learning
+Deep Learning
+Artificial Intelligence
+Cloud Computing
+DevOps
+Cybersecurity
+Penetration Testing
+Network Security
+Mobile Development
+Web Development
+UI/UX Design
+Testing
+Automation
+Selenium
+Appium
+Manual Testing
+ETL
+Data Warehousing
+Big Data
+Data Mining
+Business Intelligence
+Statistics
+Mathematics
+Finance
+Accounting
+Marketing
+Sales
+Customer Service
+Leadership
+Team Management
+Time Management
+Problem Solving
+Critical Thinking
+Communication
+Collaboration
+Adaptability
+Creativity
+Negotiation
+Presentation Skills
+Rust
+Objective-C
+Assembly
+VBA
+Delphi
+COBOL
+Fortran
+Groovy
+Lua
+Dart
+ABAP
+Shell Scripting
+Bash
+PowerShell
+Vue.js
+Ember.js
+Backbone.js
+Bootstrap
+jQuery
+Express.js
+FastAPI
+ASP.NET
+Laravel
+Symfony
+CakePHP
+Zend
+Meteor
+Next.js
+Nuxt.js
+Redux
+MobX
+RxJS
+NestJS
+Electron
+Qt
+GTK
+wxWidgets
+Cassandra
+CouchDB
+MariaDB
+DB2
+Sybase
+Teradata
+InfluxDB
+DynamoDB
+Couchbase
+Snowflake
+BigQuery
+Redshift
+Greenplum
+Vertica
+ClickHouse
+Memcached
+HBase
+Hive
+Pig
+Presto
+Trino
+OpenStack
+Heroku
+DigitalOcean
+Vercel
+Netlify
+CircleCI
+Travis CI
+Bamboo
+Ansible
+Chef
+Puppet
+SaltStack
+Terraform
+CloudFormation
+Istio
+Consul
+Prometheus
+Grafana
+New Relic
+Datadog
+Splunk
+PagerDuty
+JUnit
+Pytest
+Mocha
+Chai
+Jest
+Cypress
+QUnit
+TestNG
+Postman
+SoapUI
+LoadRunner
+JMeter
+QTP
+TestRail
+Allure
+Burp Suite
+Metasploit
+Wireshark
+Nessus
+Snort
+SIEM
+SOC
+OWASP
+ISO 27001
+GDPR
+HIPAA
+PCI DSS
+InDesign
+Premiere Pro
+After Effects
+Blender
+Maya
+3ds Max
+Sketch
+CorelDRAW
+Canva
+Audacity
+Final Cut Pro
+Logic Pro
+MS Project
+Basecamp
+Asana
+Confluence
+Notion
+Smartsheet
+Wrike
+Monday.com
+ClickUp
+Zoho Projects
+MS Visio
+Gantt Charts
+Emotional Intelligence
+Conflict Resolution
+Mentoring
+Coaching
+Decision Making
+Work Ethic
+Attention to Detail
+Self-Motivation
+Flexibility
+Resilience
+Resourcefulness
+Empathy
+Active Listening
+Accountability
+Initiative
+Strategic Thinking
+Analytical Thinking
+Multitasking
+Organization
+Goal Setting
+Delegation
+Influence
+Trustworthiness
+Work Under Pressure
+Customer Orientation
+Process Improvement
+Stakeholder Management
+Presentation
+Facilitation
+Teamwork
+Collaboration
+Time Management
+Creativity
+Critical Thinking
+Negotiation
+Adaptability
+Communication
+Leadership
+Problem Solving
