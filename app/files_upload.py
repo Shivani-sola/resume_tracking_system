@@ -16,11 +16,11 @@ app = FastAPI()
 router = APIRouter()
 
 DB_CONFIG = {
-    "host": "localhost",
+    "host": "10.30.0.102",
     "port": 5432,
-    "database": "postgres",
-    "user": "postgres",
-    "password": "Manojgopi@12"
+    "database": "vectordb",
+    "user": "devuser",
+    "password": "StrongPassword123"
 }
 
 SUPPORTED_TYPES = {".pdf", ".doc", ".docx", ".txt"}
@@ -216,11 +216,59 @@ def get_resumes(
         if parsed:
             name, resume_text = parsed
             experience_years = extract_experience_years(resume_text or "")
+            # Extract summary/career objective up to (but not including) Education section
+            def extract_resume_summary(text):
+                import re
+                if not text:
+                    return None
+                summary_patterns = [
+                    r'(?:summary|career objective|professional summary|profile|objective)\s*[:\-\n]+(.{0,1000})',
+                ]
+                for pat in summary_patterns:
+                    m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
+                    if m:
+                        summary = m.group(1)
+                        summary = re.split(r'\n+\s*(Education|EDUCATION|Academic|ACADEMIC)\b', summary)[0]
+                        return summary.strip()
+                summary = re.split(r'\n+\s*(Education|EDUCATION|Academic|ACADEMIC)\b', text)[0]
+                return summary.strip()[:400]
+
+            # Extract skills using pyresparser if available, else fallback to regex
+            def extract_skills(text):
+                try:
+                    from pyresparser import ResumeParser
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.txt', mode='w', encoding='utf-8') as temp:
+                        temp.write(text)
+                        temp_path = temp.name
+                    data = ResumeParser(temp_path).get_extracted_data()
+                    os.remove(temp_path)
+                    skills = data.get('skills')
+                    if skills:
+                        return skills
+                except Exception as e:
+                    print(f"Skill extraction failed: {e}")
+                # Fallback: simple regex for common skills
+                common_skills = [
+                    'python', 'java', 'c++', 'c#', 'javascript', 'react', 'node', 'sql', 'html', 'css', 'aws', 'docker',
+                    'django', 'flask', 'angular', 'typescript', 'git', 'linux', 'excel', 'pandas', 'numpy', 'machine learning',
+                    'deep learning', 'nlp', 'tensorflow', 'keras', 'pytorch', 'tableau', 'power bi', 'spark', 'hadoop', 'scala',
+                    'php', 'ruby', 'go', 'swift', 'kotlin', 'android', 'ios', 'rest', 'graphql', 'mongodb', 'postgresql', 'mysql'
+                ]
+                found = set()
+                for skill in common_skills:
+                    if re.search(r'\b' + re.escape(skill) + r'\b', text, re.IGNORECASE):
+                        found.add(skill.title())
+                return sorted(found)
+
+            description = extract_resume_summary(resume_text)
+            skills = extract_skills(resume_text or "")
             parsed_data = {
                 "name": name,
                 "email": f"{name.lower().replace(' ', '')}@example.com",
-                "skills": ["Python", "React"],
-                "experience_years": experience_years
+                "skills": skills,
+                "experience_years": experience_years,
+                "description": description
             }
         else:
             parsed_data = {
