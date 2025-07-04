@@ -26,11 +26,11 @@ app.add_middleware(
 )
 
 DB_CONFIG = {
-    "host": "localhost",
+    "host": "10.30.0.102",
     "port": 5432,
-    "database": "postgres",
-    "user": "postgres",
-    "password": "Manojgopi@12"
+    "database": "vectordb",
+    "user": "devuser",
+    "password": "StrongPassword123"
 }
 
 SUPPORTED_TYPES = {".pdf", ".doc", ".docx", ".txt"}
