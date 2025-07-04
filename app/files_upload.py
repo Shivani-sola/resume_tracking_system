@@ -74,54 +74,6 @@ def extract_experience_years(text: str):
         return int(match.group(1))
     return "Fresher"
 
-def extract_summary(text: str, max_chars: int = 1000) -> str:
-    """
-    Extracts the professional summary or similar section from the resume text.
-    Falls back to the first few sentences if no section is found.
-    """
-    if not text:
-        return ""
-    section_match = re.search(
-        r'(summary|career objective|professional summary|profile|objective)\s*[:\-\n]+',
-        text, re.IGNORECASE
-    )
-    if section_match:
-        start_idx = section_match.end()
-        after = text[start_idx:]
-        next_section = re.search(r'\n\s*(education|academic|experience|work experience|professional experience|projects|skills|certifications|contact|personal information)\b', after, re.IGNORECASE)
-        if next_section:
-            summary = after[:next_section.start()]
-        else:
-            summary = after[:max_chars]
-        return summary.strip()
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    return " ".join(sentences[:3])
-
-def extract_skills(text: str) -> list:
-    """
-    Extracts skills from resume text using a predefined list of common skills.
-    """
-    if not text:
-        return []
-    # Only extract from the skills section, not from the whole text
-    text_lower = text.lower()
-    # Look for a skills section
-    match = re.search(r'(skills|technical skills|key skills)\s*[:\-\n]+([\s\S]{0,500})', text_lower)
-    if match:
-        section = match.group(2)
-        # Stop at the next major section header if present
-        next_section = re.search(r'\n\s*(education|academic|experience|work experience|professional experience|projects|certifications|contact|personal information)\b', section, re.IGNORECASE)
-        if next_section:
-            section = section[:next_section.start()]
-        # Split by common delimiters
-        possible_skills = re.split(r'[\n,;•\-\u2022]', section)
-        # Clean and filter
-        skills = [s.strip().title() for s in possible_skills if s.strip() and len(s.strip()) < 40]
-        # Remove duplicates and empty
-        skills = sorted(set(skills))
-        return skills
-    return []
-
 @app.post("/api/resumes/upload")
 async def upload_resumes(files: List[UploadFile] = File(...)):
     print("Upload endpoint called")
@@ -172,13 +124,14 @@ async def upload_resumes(files: List[UploadFile] = File(...)):
                 svd_vec = svd.transform(tfidf_vec)
                 embedding = svd_vec[0].tolist()  # VECTOR(300) expects a list/array
 
-                # Save to resumes_embeddings table
+                # Save to resume_embeddings table with pdf_id
                 cursor.execute(
                     """
-                    INSERT INTO resume_embeddings (name, resume_text, embedding, file_data, file_name)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO resume_embeddings (pdf_id, name, resume_text, embedding, file_data, file_name)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
+                        resume_id,
                         parsed_data["name"],
                         text,
                         embedding,
@@ -236,14 +189,14 @@ def get_resumes(
 ):
     conn = get_db_conn()
     cursor = conn.cursor()
- 
+
     offset = (page - 1) * limit
- 
+
     # Get total count
     cursor.execute("SELECT COUNT(*) FROM pdf_file")
     total_items = cursor.fetchone()[0]
     total_pages = (total_items + limit - 1) // limit
- 
+
     # Fetch resumes with pagination
     cursor.execute(
         """
@@ -255,11 +208,11 @@ def get_resumes(
         (limit, offset)
     )
     rows = cursor.fetchall()
- 
+
     resumes = []
     for row in rows:
         resume_id, filename, upload_date = row
- 
+
         # Fetch parsed data and resume_text from resume_embeddings if available
         cursor.execute(
             """
@@ -274,14 +227,13 @@ def get_resumes(
         if parsed:
             name, resume_text = parsed
             experience_years = extract_experience_years(resume_text or "")
-            
             # Extract summary/career objective up to (but not including) Education section
             def extract_resume_summary(text):
                 import re
                 if not text:
                     return None
                 summary_patterns = [
-                    r'(?:summary|career objective|professional summary|profile|objective)\s*[:\-\n]+(.{0,1000})',
+                    r'(?:summary|career objective|professional summary|profile|objective statement)\s*[:\-\n]+(.{0,1000})',
                 ]
                 for pat in summary_patterns:
                     m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
@@ -291,7 +243,7 @@ def get_resumes(
                         return summary.strip()
                 summary = re.split(r'\n+\s*(Education|EDUCATION|Academic|ACADEMIC)\b', text)[0]
                 return summary.strip()[:400]
- 
+
             # Extract skills using pyresparser if available, else fallback to regex
             def extract_skills(text):
                 try:
@@ -319,12 +271,21 @@ def get_resumes(
                     if re.search(r'\b' + re.escape(skill) + r'\b', text, re.IGNORECASE):
                         found.add(skill.title())
                 return sorted(found)
- 
+
             description = extract_resume_summary(resume_text)
             skills = extract_skills(resume_text or "")
+            # Extract email from resume text
+            def extract_email(text):
+                import re
+                if not text:
+                    return None
+                matches = re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', text)
+                return matches[0] if matches else None
+
+            email = extract_email(resume_text or "")
             parsed_data = {
                 "name": name,
-                "email": f"{name.lower().replace(' ', '')}@example.com",
+                "email": email,
                 "skills": skills,
                 "experience_years": experience_years,
                 "description": description
@@ -336,7 +297,7 @@ def get_resumes(
                 "skills": [],
                 "experience_years": "Fresher"
             }
- 
+
         resumes.append({
             "id": f"resume_{resume_id}",
             "filename": filename,
@@ -344,10 +305,10 @@ def get_resumes(
             "parsed_data": parsed_data,
             "match_score": None
         })
- 
+
     cursor.close()
     conn.close()
- 
+
     return {
         "success": True,
         "data": {
