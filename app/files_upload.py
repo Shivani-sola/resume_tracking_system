@@ -233,33 +233,47 @@ def get_resumes(
                 if not text:
                     return None
                 summary_patterns = [
-                    r'(?:summary|career objective|professional summary|profile|objective statement)\s*[:\-\n]+(.{0,1000})',
+                    r'(summary|career objective|professional summary|profile|objective statement|objective|about me|personal profile)\s*[:\-\n]+(.{0,2000})',
                 ]
+                stop_sections = r'(Education|Academic|Skills|Certifications|Projects|Contact|Experience|Work Experience|Professional Experience|Achievements|Languages|Interests|References|Personal Details|Declaration)'
                 for pat in summary_patterns:
                     m = re.search(pat, text, re.IGNORECASE | re.DOTALL)
                     if m:
-                        summary = m.group(1)
-                        summary = re.split(r'\n+\s*(Education|EDUCATION|Academic|ACADEMIC)\b', summary)[0]
+                        summary = m.group(2)
+                        # Stop at any stop section header, even if not at line start
+                        stop_match = re.search(r'(?i)(^|\n|\r|\r\n)\s*' + stop_sections + r'\b', summary)
+                        if stop_match:
+                            summary = summary[:stop_match.start()]
+                        # Remove any lines that are just section headers
+                        summary_lines = summary.strip().splitlines()
+                        filtered_lines = []
+                        for line in summary_lines:
+                            if not re.match(r'^\s*' + stop_sections + r'\s*$', line, re.IGNORECASE):
+                                filtered_lines.append(line)
+                        summary = '\n'.join(filtered_lines[:5])[:600]
                         return summary.strip()
-                summary = re.split(r'\n+\s*(Education|EDUCATION|Academic|ACADEMIC)\b', text)[0]
-                return summary.strip()[:400]
+                # If no header found, try to get the first block before any stop section
+                block = text
+                stop_match = re.search(r'(?i)(^|\n|\r|\r\n)\s*' + stop_sections + r'\b', block)
+                if stop_match:
+                    block = block[:stop_match.start()]
+                block_lines = block.strip().splitlines()
+                filtered_lines = []
+                for line in block_lines:
+                    if not re.match(r'^\s*' + stop_sections + r'\s*$', line, re.IGNORECASE):
+                        filtered_lines.append(line)
+                block = '\n'.join(filtered_lines[:5])[:600]
+                return block.strip()
 
             # Extract skills using pyresparser if available, else fallback to regex
             def extract_skills(text):
-                try:
-                    from pyresparser import ResumeParser
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.txt', mode='w', encoding='utf-8') as temp:
-                        temp.write(text)
-                        temp_path = temp.name
-                    data = ResumeParser(temp_path).get_extracted_data()
-                    os.remove(temp_path)
-                    skills = data.get('skills')
-                    if skills:
-                        return skills
-                except Exception as e:
-                    print(f"Skill extraction failed: {e}")
-                # Fallback: simple regex for common skills
+                import re
+                # Try to extract only from the Skills section
+                match = re.search(r'(skills|technical skills|key skills)\s*[:\-\n]+(.{0,1000})', text, re.IGNORECASE | re.DOTALL)
+                if match:
+                    section = match.group(2)
+                else:
+                    section = text
                 common_skills = [
                     'python', 'java', 'c++', 'c#', 'javascript', 'react', 'node', 'sql', 'html', 'css', 'aws', 'docker',
                     'django', 'flask', 'angular', 'typescript', 'git', 'linux', 'excel', 'pandas', 'numpy', 'machine learning',
@@ -268,7 +282,7 @@ def get_resumes(
                 ]
                 found = set()
                 for skill in common_skills:
-                    if re.search(r'\b' + re.escape(skill) + r'\b', text, re.IGNORECASE):
+                    if re.search(r'\b' + re.escape(skill) + r'\b', section, re.IGNORECASE):
                         found.add(skill.title())
                 return sorted(found)
 

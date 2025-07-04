@@ -9,9 +9,8 @@ pdfplumber
 python-docx
 numpy
 pandas
-spacy
-pyresparser
+spacy==2.3.9
+# pyresparser
 rapidfuzz
 python-dotenv
-# Optional for CORS and development
 aiofiles
