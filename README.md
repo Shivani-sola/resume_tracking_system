@@ -1,70 +1,203 @@
-Resume Match System
-This project is a resume matching system that:
+# Resume Tracking System
 
-Stores PDF resumes in a PostgreSQL database
-Extracts text from resumes and generates embeddings using TF-IDF + SVD
-Stores and embeds job descriptions
-Computes similarity scores between job descriptions and resumes to find the best matches
+This project is a Resume Tracking System built with FastAPI and PostgreSQL. It allows you to upload, parse, store, and match resumes, extracting key information such as name, email, skills, and summary/objective from each resume.
 
+---
 
-Features
+## Features
 
-Upload and store resumes as PDFs in the database
-Extract and embed resume and job description text
-Match resumes to job descriptions using cosine similarity
-All logic implemented in Python using SQLAlchemy, scikit-learn, and pdfplumber
-Setup
+- Upload resumes (PDF, DOCX, TXT)
+- Extracts name, email, skills (from skills section), and summary/objective (from summary/career objective/profile section)
+- Stores resumes and embeddings in PostgreSQL
+- List resumes with pagination
+- Download single or all resumes (as ZIP)
+- Match resumes to job descriptions using embeddings and skill extraction
 
-Install dependencies:
+---
 
-  pip install -r requirements.txt
+## Prerequisites
 
-Configure your PostgreSQL database:
+- Python 3.8+
+- PostgreSQL database
+- [pip](https://pip.pypa.io/en/stable/)
 
-Create the required tables (pdf_file, resume_embeddings, job_embeddings).
-Add PDF resumes to the pdf_file table.
+---
 
-Train embedding models:
+## Setup
 
-Run the matching workflow:
-   
-     python app/run_matching.py
+### 1. Clone the repository
 
-Project Structure
-logic.py - Main logic for database operations and matching
-extractors.py - PDF and DOCX text extraction
-vectorizer.py - Embedding model training and loading
-train_embeddings.py - Script to train and save embedding models
-run_matching.py - Script to run the end-to-end matching workflow
-Requirements
-See requirements.txt for all dependencies.
-
-## Example Output
-
-When you run the matching workflow, you will see output like this:
-
-```
-Resume embeddings extracted and stored.
-Job description embedding stored.
-Top resume scores:
-Resume ID: 3, Filename: john_doe.pdf, Similarity: 0.8123
-Content: Experienced Python developer with 5 years in machine learning and SQL databases.
-
-Resume ID: 7, Filename: jane_smith.pdf, Similarity: 0.7991
-Content: Software engineer skilled in Python, data analysis, and cloud technologies.
-
-Resume ID: 2, Filename: alice_resume.pdf, Similarity: 0.7554
-Content: Data scientist with expertise in Python, SQL, and statistical modeling.
+```sh
+git clone <your-repo-url>
+cd resume_tracking_system
 ```
 
-- **Resume ID**: The unique identifier of the resume in the database
-- **Filename**: The name of the PDF file
-- **Similarity**: The cosine similarity score between the job description and the resume (higher means more relevant)
-- **Content**: The extracted text content from the resume PDF (first few lines or a summary)
+### 2. Install dependencies
 
-You can use these scores and content previews to shortlist the best-matching resumes for a given job description.
+```sh
+pip install -r requirements.txt
+```
+
+### 3. Configure PostgreSQL
+
+- Create a PostgreSQL database and user as per your environment.
+- Update the `DB_CONFIG` in `app/files_upload.py` and `DB_URI` in `app/db.py` if needed:
+    ```python
+    DB_CONFIG = {
+        "host": "10.30.0.102",
+        "port": 5432,
+        "database": "vectordb",
+        "user": "devuser",
+        "password": "StrongPassword123"
+    }
+    ```
+
+- Ensure the following tables exist:
+
+    ```sql
+    CREATE TABLE pdf_file (
+        id SERIAL PRIMARY KEY,
+        filename TEXT,
+        content BYTEA,
+        created_at TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE resume_embeddings (
+        id SERIAL PRIMARY KEY,
+        name TEXT,
+        resume_text TEXT,
+        embedding FLOAT8[],
+        file_data BYTEA,
+        file_name TEXT
+    );
+    ```
+
+### 4. Place Embedding Models
+
+Place your trained `tfidf.joblib` and `svd.joblib` files in the `embeddings/` directory.
+
+---
+
+## Running the API
+
+### 1. Start the FastAPI server
+
+```sh
+uvicorn app.files_upload:app --host 0.0.0.0 --port 8000
+```
+
+- `--host 0.0.0.0` makes the API accessible on your network.
+- `--port 8000` is the default port.
+
+### 2. Access the API docs
+
+Open your browser and go to:
+
+```
+http://<your-server-ip>:8000/docs
+```
+
+---
+
+## API Usage
+
+### 1. Upload Resumes
+
+**Endpoint:** `POST /api/resumes/upload`
+
+- Upload one or more files as `multipart/form-data` with the key `files`.
+- Supported types: `.pdf`, `.docx`, `.txt`
+
+**Example with curl:**
+```sh
+curl -F "files=@resume1.pdf" -F "files=@resume2.docx" http://<your-server-ip>:8000/api/resumes/upload
+```
+
+---
+
+### 2. List Resumes (Paginated)
+
+**Endpoint:** `GET /api/resumes`
+
+- Query params:
+    - `page` (default: 1)
+    - `limit` (default: 10, max: 100)
+
+**Example:**
+```
+http://<your-server-ip>:8000/api/resumes?page=2&limit=10
+```
+
+---
+
+### 3. Download a Resume
+
+**Endpoint:** `GET /api/resumes/{resume_id}/download`
+
+- Example:
+    ```
+    http://<your-server-ip>:8000/api/resumes/resume_1/download
+    ```
+
+---
+
+### 4. Download All Resumes as ZIP
+
+**Endpoint:** `POST /api/resumes/download-all`
+
+- Body: JSON with optional `resume_ids` (list of IDs)
+- Example:
+    ```sh
+    curl -X POST -H "Content-Type: application/json" -d '{"resume_ids": ["resume_1", "resume_2"]}' http://<your-server-ip>:8000/api/resumes/download-all
+    ```
+
+---
+
+### 5. Match Resumes to Job Description
+
+**Endpoint:** `POST /api/jobs/process-text-and-match`
+
+- Body: JSON with:
+    - `job_description` (string)
+    - `title` (optional)
+    - `resume_ids` (optional list)
+
+---
+
+### 6. Match Resumes to Job Description File
+
+**Endpoint:** `POST /api/jobs/process-file-and-match`
+
+- Form-data:
+    - `file` (job description file)
+    - `title` (optional)
+    - `resume_ids` (optional, JSON string list)
+
+---
+
+## Extraction Logic
+
+- **Name:** Extracted from the first 3 lines of the resume text (not filename), falling back to email prefix if needed.
+- **Email:** Extracted from the resume text using regex.
+- **Skills:** Extracted only from the "Skills", "Technical Skills", or "Key Skills" section of the resume.
+- **Description:** Extracted from the "Summary", "Career Objective", "Professional Summary", "Profile", or "Objective" section, up to the next major section (like "Education").
+
+---
+
+## Security & Production Notes
+
+- Change default credentials and restrict CORS in production.
+- Use HTTPS and secure your database.
+- For large deployments, use a production server (e.g., Gunicorn + Nginx).
+
+---
+
+## Troubleshooting
+
+- **Connection refused/timeouts:** Make sure you use `--host 0.0.0.0` and open port 8000 in your firewall.
+- **Database errors:** Ensure your tables match the schema above.
+- **Extraction issues:** Check that resume text is being extracted correctly and that your embedding models are present.
 
 ---
 
 ## License
-MIT License

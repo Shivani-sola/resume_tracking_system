@@ -1,10 +1,17 @@
 fastapi
 uvicorn
+psycopg2-binary
 sqlalchemy
-pydantic
-pandas
+python-multipart
 joblib
 scikit-learn
 pdfplumber
 python-docx
-psycopg2-binary
+numpy
+pandas
+spacy
+pyresparser
+rapidfuzz
+python-dotenv
+# Optional for CORS and development
+aiofiles
